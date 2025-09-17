@@ -35,17 +35,17 @@ jobs:
             command: "gitleaks detect --report-path gitleaks-report.json --report-format json -v"
             artifact_name: "gitleaks-report"
             artifact_path: "gitleaks-report.json"
-            continue_on_error: true # DIUBAH: Tidak akan menghentikan pipeline
+            continue-on-error: true
           - name: "SAST (Bandit)"
             command: "pip install bandit && bandit -r . -f json -o bandit-report.json"
             artifact_name: "bandit-sast-report"
             artifact_path: "bandit-report.json"
-            continue_on_error: true # DIUBAH: Tidak akan menghentikan pipeline
+            continue-on-error: true
           - name: "Container Scanning (Trivy)"
             command: "trivy image --format json --output trivy-container-report.json --severity CRITICAL,HIGH vuln-bank:${{ github.sha }}"
             artifact_name: "trivy-container-report"
             artifact_path: "trivy-container-report.json"
-            continue_on_error: false # TETAP: Kerentanan kritis akan menghentikan pipeline
+            continue-on-error: false
 
     steps:
       - name: Checkout Code
@@ -69,7 +69,8 @@ jobs:
           sudo mv gitleaks /usr/local/bin/
       - name: Run ${{ matrix.scan_type.name }}
         run: ${{ matrix.scan_type.command }}
-        continue_on-error: ${{ matrix.scan_type.continue_on_error }}
+        # PERBAIKAN: Menggunakan sintaks yang benar (continue-on-error)
+        continue-on-error: ${{ matrix.scan_type.continue-on-error }}
       - name: Upload Report
         if: always()
         uses: actions/upload-artifact@v4
@@ -92,9 +93,7 @@ jobs:
       - name: OWASP ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.11.0
         with:
-          # PERBAIKAN 1: Menggunakan host.docker.internal untuk mengatasi masalah jaringan
           target: 'http://host.docker.internal:5000'
-          # PERBAIKAN 2: Menulis laporan ke direktori utama untuk menghindari masalah izin
           cmd_options: '-J zap-report.json'
           fail_action: true
 
@@ -103,7 +102,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: zap-dast-report
-          # PERBAIKAN 3: Mengambil laporan dari direktori utama
           path: zap-report.json
 
   notify:
@@ -113,7 +111,6 @@ jobs:
     if: failure()
     steps:
       - name: Send Discord Webhook Notification
-        
         run: |
           curl -X POST -H "Content-Type: application/json" \
           -d '{
