@@ -78,7 +78,7 @@ jobs:
           name: ${{ matrix.scan_type.artifact_name }}
           path: ${{ matrix.scan_type.artifact_path }}
 
-dast:
+  dast:
     name: DAST (OWASP ZAP)
     runs-on: ubuntu-latest
     needs: build
@@ -89,15 +89,15 @@ dast:
         run: sudo apt-get update && sudo apt-get install -y docker-compose
       - name: Run Application using Docker Compose
         run: docker-compose up -d
-        
       
       - name: Set workspace permissions
         run: sudo chmod -R 777 ${{ github.workspace }}
 
-      - name: Run ZAP Scan
+      - name:  Run ZAP Scan
 
         run: |
           docker run \
+            --user $(id -u):$(id -g) \
             --network host \
             -v ${{ github.workspace }}:/zap/wrk/:rw \
             ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
@@ -111,7 +111,7 @@ dast:
           name: zap-dast-report
           path: zap-report.json
 
-    notify:
+  notify:
     name: Notify on Critical Failure
     runs-on: ubuntu-latest
     needs: [security_scans, dast]
