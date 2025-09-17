@@ -8,16 +8,23 @@ on:
 
 jobs:
   build:
-    name: Build Docker Image
+    name: Build and Upload Docker Image
     runs-on: ubuntu-latest
-    outputs:
-      image_name: vuln-bank:${{ github.sha }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
       - name: Build Docker Image
-        run: docker build -t ${{ job.outputs.image_name }} .
+        run: docker build -t vuln-bank:${{ github.sha }} .
+
+      - name: Save Docker image
+        run: docker save vuln-bank:${{ github.sha }} -o image.tar
+      
+      - name: Upload Docker image as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: image.tar
 
   security_scans:
     name: Security Scanning
@@ -48,7 +55,7 @@ jobs:
             artifact_path: "trivy-config-report.json"
             continue_on_error: false
           - name: "Container Scanning (Trivy)"
-            command: "trivy image --format json --output trivy-container-report.json --severity CRITICAL,HIGH ${{ needs.build.outputs.image_name }}"
+            command: "trivy image --format json --output trivy-container-report.json --severity CRITICAL,HIGH vuln-bank:${{ github.sha }}"
             artifact_name: "trivy-container-report"
             artifact_path: "trivy-container-report.json"
             continue_on_error: false
@@ -59,14 +66,13 @@ jobs:
         with:
           fetch-depth: 0 
 
-      - name: Load Docker image from build job
+      - name: Download Docker image artifact
         uses: actions/download-artifact@v4
         with:
           name: docker-image
-          path: /tmp
-
-      - name: Restore Docker image
-        run: docker load < /tmp/docker-image.tar
+      
+      - name: Load Docker image
+        run: docker load -i image.tar
 
       - name: Install Trivy
         run: |
