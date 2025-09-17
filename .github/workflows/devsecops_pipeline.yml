@@ -74,15 +74,12 @@ jobs:
       - name: Load Docker image
         run: docker load -i image.tar
 
-      - name: Install Trivy
+      - name: Install Tools
         run: |
           sudo apt-get update && sudo apt-get install -y wget apt-transport-https gnupg lsb-release
           wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
           echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
           sudo apt-get update && sudo apt-get install -y trivy
-
-      - name: Install Gitleaks
-        run: |
           wget https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz
           tar -xzf gitleaks_8.18.2_linux_x64.tar.gz
           sudo mv gitleaks /usr/local/bin/
@@ -112,8 +109,11 @@ jobs:
       - name: Run Application using Docker Compose
         run: docker-compose up -d
         
-      - name: Create ZAP directory for report
-        run: mkdir -p zap/wrk
+      # PERBAIKAN: Membuat direktori DAN memberikan izin yang benar
+      - name: Create and Set Permissions for ZAP Directory
+        run: |
+          mkdir -p zap/wrk
+          sudo chown -R $(id -u):$(id -g) zap/
 
       - name: OWASP ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.11.0
@@ -143,8 +143,9 @@ jobs:
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
+      # PERBAIKAN: Menggunakan action yang benar dan versi terbaru
       - name: Send Discord Notification
-        uses: crazy-max/ghaction-discord@v3
+        uses: crazy-max/ghaction-discord@v4
         with:
           webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
           embeds: |
