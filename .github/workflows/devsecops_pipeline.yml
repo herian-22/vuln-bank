@@ -11,14 +11,12 @@ jobs:
     name: Build and Upload Docker Image
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
       - name: Build Docker Image
         run: docker build -t vuln-bank:${{ github.sha }} .
       - name: Save Docker image
         run: docker save vuln-bank:${{ github.sha }} -o image.tar
-      - name: Upload Docker image as artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: docker-image
           path: image.tar
@@ -30,8 +28,7 @@ jobs:
     outputs:
       summary: ${{ steps.parse_report.outputs.summary }}
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - name: Install Gitleaks
         run: |
@@ -41,16 +38,13 @@ jobs:
       - name: Run Gitleaks Scan
         run: gitleaks detect --report-path gitleaks-report.json --report-format json -v
         continue-on-error: true
-      - name: Upload Gitleaks Report
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with: { name: gitleaks-report, path: gitleaks-report.json }
       - name: Parse Gitleaks Report for Summary
         id: parse_report
         if: always()
         run: |
-          sudo apt-get install -y jq
-          # PERBAIKAN: Menangani kasus jika file gitleaks-report.json kosong (tidak ada temuan)
-          SUMMARY=$(jq -r 'if . == null or length == 0 then "Tidak ada temuan." else (group_by(.RuleID) | map("• \(.length)x \(. [0].Description)") | join("\n")) end' gitleaks-report.json)
+          SUMMARY=$(python3 scripts/parse_reports.py gitleaks gitleaks-report.json)
           echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
 
   sast_scan:
@@ -60,21 +54,17 @@ jobs:
     outputs:
       summary: ${{ steps.parse_report.outputs.summary }}
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
       - name: Run Bandit Scan
         run: pip install bandit && bandit -r . -f json -o bandit-report.json
         continue-on-error: true
-      - name: Upload Bandit Report
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with: { name: bandit-report, path: bandit-report.json }
       - name: Parse Bandit Report for Summary
         id: parse_report
         if: always()
         run: |
-          sudo apt-get install -y jq
-          # PERBAIKAN: Menangani kasus jika tidak ada 'results'
-          SUMMARY=$(jq -r '.results | if . == null or length == 0 then "Tidak ada temuan." else (group_by(.test_name) | map("• \(.length)x \(. [0].test_name)") | join("\n")) end' bandit-report.json)
+          SUMMARY=$(python3 scripts/parse_reports.py bandit bandit-report.json)
           echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
 
   container_scan:
@@ -84,8 +74,7 @@ jobs:
     outputs:
       summary: ${{ steps.parse_report.outputs.summary }}
     steps:
-      - name: Download Docker image artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with: { name: docker-image }
       - name: Load Docker image
         run: docker load -i image.tar
@@ -95,19 +84,17 @@ jobs:
           echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
           sudo apt-get update && sudo apt-get install -y trivy
       - name: Run Trivy Scan
-        id: trivy_scan
         run: trivy image --format json --output trivy-report.json --severity CRITICAL,HIGH vuln-bank:${{ github.sha }}
         continue-on-error: true
-      - name: Upload Trivy Report
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with: { name: trivy-report, path: trivy-report.json }
       - name: Parse Trivy Report for Summary
         id: parse_report
         if: always()
         run: |
-          sudo apt-get install -y jq
-          # PERBAIKAN: Menangani kasus jika tidak ada 'Results' atau 'Vulnerabilities' (null)
-          SUMMARY=$(jq -r 'if .Results == null or (.Results | length) == 0 or .Results[0].Vulnerabilities == null then "Tidak ada temuan." else .Results[0].Vulnerabilities | group_by(.Severity) | map("• \(.length)x \(. [0].Severity)") | join("\n") end' trivy-report.json)
+          # Perlu checkout kode untuk mendapatkan script python
+          uses: actions/checkout@v4
+          SUMMARY=$(python3 scripts/parse_reports.py trivy trivy-report.json)
           echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
 
   dast:
@@ -117,8 +104,7 @@ jobs:
     outputs:
       summary: ${{ steps.parse_zap_report.outputs.summary }}
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
       - name: Install Docker Compose
         run: sudo apt-get update && sudo apt-get install -y docker-compose
       - name: Run Application using Docker Compose
@@ -126,22 +112,18 @@ jobs:
       - name: Set workspace permissions
         run: sudo chmod -R 777 ${{ github.workspace }}
       - name: Run ZAP Scan
-        id: zap_scan
         run: |
           docker run --network host -v ${{ github.workspace }}:/zap/wrk/:rw \
           ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
           -t http://127.0.0.1:5000 -J zap-report.json -l PASS
         continue-on-error: true
-      - name: Upload DAST Report
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with: { name: zap-report, path: zap-report.json }
       - name: Parse ZAP Report for Summary
         id: parse_zap_report
         if: always()
         run: |
-          sudo apt-get install -y jq
-          # PERBAIKAN: Menangani kasus jika tidak ada 'alerts'
-          SUMMARY=$(jq -r '.site[0].alerts | if . == null or length == 0 then "Tidak ada temuan." else (group_by(.riskdesc) | map("• \(.length)x \(. [0].riskdesc)") | join("\n")) end' zap-report.json)
+          SUMMARY=$(python3 scripts/parse_reports.py zap zap-report.json)
           echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
 
   notify:
@@ -167,6 +149,12 @@ jobs:
             PIPELINE_COLOR=15158332 # Merah
           fi
 
+          # Mengganti newline dengan karakter \n untuk JSON
+          GITLEAKS_SUMMARY_JSON=$(echo "$GITLEAKS_SUMMARY" | sed -z 's/\n/\\n/g')
+          BANDIT_SUMMARY_JSON=$(echo "$BANDIT_SUMMARY" | sed -z 's/\n/\\n/g')
+          TRIVY_SUMMARY_JSON=$(echo "$TRIVY_SUMMARY" | sed -z 's/\n/\\n/g')
+          DAST_SUMMARY_JSON=$(echo "$DAST_SUMMARY" | sed -z 's/\n/\\n/g')
+
           curl -X POST -H "Content-Type: application/json" \
           -d '{
             "embeds": [{
@@ -175,10 +163,10 @@ jobs:
               "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
               "color": '${PIPELINE_COLOR}',
               "fields": [
-                { "name": "Secret Scanning (Gitleaks)", "value": "```'${GITLEAKS_SUMMARY}'```" },
-                { "name": "SAST (Bandit)", "value": "```'${BANDIT_SUMMARY}'```" },
-                { "name": "Container Scanning (Trivy)", "value": "```'${TRIVY_SUMMARY}'```" },
-                { "name": "DAST (OWASP ZAP)", "value": "```'${DAST_SUMMARY}'```" }
+                { "name": "Secret Scanning (Gitleaks)", "value": "```'${GITLEAKS_SUMMARY_JSON}'```" },
+                { "name": "SAST (Bandit)", "value": "```'${BANDIT_SUMMARY_JSON}'```" },
+                { "name": "Container Scanning (Trivy)", "value": "```'${TRIVY_SUMMARY_JSON}'```" },
+                { "name": "DAST (OWASP ZAP)", "value": "```'${DAST_SUMMARY_JSON}'```" }
               ],
               "footer": { "text": "Commit: ${{ github.sha }} oleh ${{ github.actor }}" }
             }]
