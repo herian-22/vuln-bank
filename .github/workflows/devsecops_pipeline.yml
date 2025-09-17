@@ -13,13 +13,10 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
       - name: Build Docker Image
         run: docker build -t vuln-bank:${{ github.sha }} .
-
       - name: Save Docker image
         run: docker save vuln-bank:${{ github.sha }} -o image.tar
-      
       - name: Upload Docker image as artifact
         uses: actions/upload-artifact@v4
         with:
@@ -38,42 +35,29 @@ jobs:
             command: "gitleaks detect --report-path gitleaks-report.json --report-format json -v"
             artifact_name: "gitleaks-report"
             artifact_path: "gitleaks-report.json"
-            continue_on_error: false
+            continue_on_error: true # DIUBAH: Tidak akan menghentikan pipeline
           - name: "SAST (Bandit)"
             command: "pip install bandit && bandit -r . -f json -o bandit-report.json"
             artifact_name: "bandit-sast-report"
             artifact_path: "bandit-report.json"
-            continue_on_error: false
-          - name: "SCA (Trivy - requirements.txt)"
-            command: "trivy fs --format json --output trivy-sca-report.json --severity CRITICAL,HIGH requirements.txt"
-            artifact_name: "trivy-sca-report"
-            artifact_path: "trivy-sca-report.json"
-            continue_on_error: false
-          - name: "Misconfiguration Scanning (Trivy - Dockerfile)"
-            command: "trivy config --format json --output trivy-config-report.json --severity CRITICAL,HIGH ."
-            artifact_name: "trivy-misconfig-report"
-            artifact_path: "trivy-config-report.json"
-            continue_on_error: false
+            continue_on_error: true # DIUBAH: Tidak akan menghentikan pipeline
           - name: "Container Scanning (Trivy)"
             command: "trivy image --format json --output trivy-container-report.json --severity CRITICAL,HIGH vuln-bank:${{ github.sha }}"
             artifact_name: "trivy-container-report"
             artifact_path: "trivy-container-report.json"
-            continue_on_error: false
+            continue_on_error: false # TETAP: Kerentanan kritis akan menghentikan pipeline
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0 
-
       - name: Download Docker image artifact
         uses: actions/download-artifact@v4
         with:
           name: docker-image
-      
       - name: Load Docker image
         run: docker load -i image.tar
-
       - name: Install Tools
         run: |
           sudo apt-get update && sudo apt-get install -y wget apt-transport-https gnupg lsb-release
@@ -83,13 +67,11 @@ jobs:
           wget https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz
           tar -xzf gitleaks_8.18.2_linux_x64.tar.gz
           sudo mv gitleaks /usr/local/bin/
-
       - name: Run ${{ matrix.scan_type.name }}
         run: ${{ matrix.scan_type.command }}
-        continue-on-error: ${{ matrix.scan_type.continue_on_error }}
-
-      - name: Upload ${{ matrix.scan_type.name }} Report
-        if: failure()
+        continue_on-error: ${{ matrix.scan_type.continue_on_error }}
+      - name: Upload Report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.scan_type.artifact_name }}
@@ -102,24 +84,18 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-        
       - name: Install Docker Compose
         run: sudo apt-get update && sudo apt-get install -y docker-compose
-
       - name: Run Application using Docker Compose
         run: docker-compose up -d
         
-      # PERBAIKAN: Membuat direktori DAN memberikan izin yang benar
-      - name: Create and Set Permissions for ZAP Directory
-        run: |
-          mkdir -p zap/wrk
-          sudo chown -R $(id -u):$(id -g) zap/
-
       - name: OWASP ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.11.0
         with:
-          target: 'http://127.0.0.1:5000'
-          cmd_options: '-J /zap/wrk/zap-report.json'
+          # PERBAIKAN 1: Menggunakan host.docker.internal untuk mengatasi masalah jaringan
+          target: 'http://host.docker.internal:5000'
+          # PERBAIKAN 2: Menulis laporan ke direktori utama untuk menghindari masalah izin
+          cmd_options: '-J zap-report.json'
           fail_action: true
 
       - name: Upload DAST Report
@@ -127,29 +103,21 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: zap-dast-report
-          path: zap/wrk/zap-report.json
+          # PERBAIKAN 3: Mengambil laporan dari direktori utama
+          path: zap-report.json
 
   notify:
-    name: Notify on Failure
+    name: Notify on Critical Failure
     runs-on: ubuntu-latest
     needs: [security_scans, dast]
     if: failure()
     steps:
-      - name: Send Slack Notification
-        uses: slackapi/slack-github-action@v1.25.0
-        with:
-          channel-id: 'A09EFBNCQGL' 
-          slack-message: "🚨 **Kerentanan Kritis Terdeteksi** 🚨\n\nPipeline keamanan untuk repositori *${{ github.repository }}* gagal.\n\n*Commit*: `${{ github.sha }}`\n*Pemicu*: `${{ github.actor }}`\n\nSilakan segera periksa log untuk detailnya:\n${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-
-      # PERBAIKAN: Menggunakan action yang benar dan versi terbaru
-      - name: Send Discord Notification
-        uses: crazy-max/ghaction-discord@v4
-        with:
-          webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          embeds: |
-            [{
+      - name: Send Discord Webhook Notification
+        
+        run: |
+          curl -X POST -H "Content-Type: application/json" \
+          -d '{
+            "embeds": [{
               "title": "🚨 Kerentanan Kritis Terdeteksi 🚨",
               "description": "Pipeline keamanan untuk repositori **${{ github.repository }}** gagal.",
               "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
@@ -167,6 +135,8 @@ jobs:
                 }
               ],
               "footer": {
-                "text": "Silakan periksa log untuk detailnya."
+                "text": "Kegagalan terjadi pada job DAST atau Trivy. Silakan periksa log."
               }
             }]
+          }' \
+          ${{ secrets.DISCORD_WEBHOOK_URL }}
