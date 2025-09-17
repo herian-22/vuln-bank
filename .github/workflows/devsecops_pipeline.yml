@@ -17,9 +17,8 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build Docker Image
-        run: docker build -t vuln-bank:${{ github.sha }} .
+        run: docker build -t ${{ job.outputs.image_name }} .
 
-  
   security_scans:
     name: Security Scanning
     runs-on: ubuntu-latest
@@ -32,27 +31,27 @@ jobs:
             command: "gitleaks detect --report-path gitleaks-report.json --report-format json -v"
             artifact_name: "gitleaks-report"
             artifact_path: "gitleaks-report.json"
-            continue_on_error: false # <-- DIUBAH DARI TRUE
+            continue_on_error: false
           - name: "SAST (Bandit)"
             command: "pip install bandit && bandit -r . -f json -o bandit-report.json"
             artifact_name: "bandit-sast-report"
             artifact_path: "bandit-report.json"
-            continue_on_error: false # <-- DIUBAH DARI TRUE
+            continue_on_error: false
           - name: "SCA (Trivy - requirements.txt)"
             command: "trivy fs --format json --output trivy-sca-report.json --severity CRITICAL,HIGH requirements.txt"
             artifact_name: "trivy-sca-report"
             artifact_path: "trivy-sca-report.json"
-            continue_on_error: false # <-- DIUBAH DARI TRUE
+            continue_on_error: false
           - name: "Misconfiguration Scanning (Trivy - Dockerfile)"
             command: "trivy config --format json --output trivy-config-report.json --severity CRITICAL,HIGH ."
             artifact_name: "trivy-misconfig-report"
             artifact_path: "trivy-config-report.json"
-            continue_on_error: false # <-- DIUBAH DARI TRUE
+            continue_on_error: false
           - name: "Container Scanning (Trivy)"
-            command: "trivy image --format json --output trivy-container-report.json --severity CRITICAL,HIGH vuln-bank:${{ needs.build.outputs.image_name }}"
+            command: "trivy image --format json --output trivy-container-report.json --severity CRITICAL,HIGH ${{ needs.build.outputs.image_name }}"
             artifact_name: "trivy-container-report"
             artifact_path: "trivy-container-report.json"
-            continue_on_error: false # <-- DIUBAH DARI TRUE
+            continue_on_error: false
 
     steps:
       - name: Checkout Code
@@ -60,14 +59,21 @@ jobs:
         with:
           fetch-depth: 0 
 
+      - name: Load Docker image from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp
+
+      - name: Restore Docker image
+        run: docker load < /tmp/docker-image.tar
+
       - name: Install Trivy
         run: |
-          sudo apt-get update
-          sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+          sudo apt-get update && sudo apt-get install -y wget apt-transport-https gnupg lsb-release
           wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
           echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
-          sudo apt-get update
-          sudo apt-get install -y trivy
+          sudo apt-get update && sudo apt-get install -y trivy
 
       - name: Install Gitleaks
         run: |
@@ -80,14 +86,12 @@ jobs:
         continue-on-error: ${{ matrix.scan_type.continue_on_error }}
 
       - name: Upload ${{ matrix.scan_type.name }} Report
-        # Jalankan langkah ini hanya jika langkah sebelumnya gagal (untuk menyimpan bukti)
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.scan_type.artifact_name }}
           path: ${{ matrix.scan_type.artifact_path }}
 
-  
   dast:
     name: DAST (OWASP ZAP)
     runs-on: ubuntu-latest
@@ -97,28 +101,28 @@ jobs:
         uses: actions/checkout@v4
         
       - name: Install Docker Compose
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y docker-compose
+        run: sudo apt-get update && sudo apt-get install -y docker-compose
+
       - name: Run Application using Docker Compose
         run: docker-compose up -d
         
+      - name: Create ZAP directory for report
+        run: mkdir -p zap/wrk
+
       - name: OWASP ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.11.0
         with:
           target: 'http://127.0.0.1:5000'
-          cmd_options: '-J zap-report.json'
-          fail_action: true # <-- DIUBAH DARI FALSE
+          cmd_options: '-J /zap/wrk/zap-report.json'
+          fail_action: true
 
       - name: Upload DAST Report
-        # Jalankan langkah ini hanya jika langkah sebelumnya gagal (untuk menyimpan bukti)
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: zap-dast-report
-          path: zap-report.json
+          path: zap/wrk/zap-report.json
 
-  
   notify:
     name: Notify on Failure
     runs-on: ubuntu-latest
@@ -134,7 +138,28 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 
       - name: Send Discord Notification
-        uses: ts-new/discord-action@v0.1.2
+        uses: crazy-max/ghaction-discord@v3
         with:
           webhook_url: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          message: "🚨 **Kerentanan Kritis Terdeteksi** 🚨\n\nPipeline keamanan untuk repositori **${{ github.repository }}** gagal.\n\n**Commit**: `${{ github.sha }}`\n**Pemicu**: `${{ github.actor }}`\n\nSilakan segera periksa log untuk detailnya:\n${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          embeds: |
+            [{
+              "title": "🚨 Kerentanan Kritis Terdeteksi 🚨",
+              "description": "Pipeline keamanan untuk repositori **${{ github.repository }}** gagal.",
+              "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              "color": 15158332,
+              "fields": [
+                {
+                  "name": "Commit",
+                  "value": "`${{ github.sha }}`",
+                  "inline": true
+                },
+                {
+                  "name": "Pemicu",
+                  "value": "${{ github.actor }}",
+                  "inline": true
+                }
+              ],
+              "footer": {
+                "text": "Silakan periksa log untuk detailnya."
+              }
+            }]
