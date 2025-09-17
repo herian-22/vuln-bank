@@ -49,7 +49,8 @@ jobs:
         if: always()
         run: |
           sudo apt-get install -y jq
-          SUMMARY=$(jq -r '. | if length == 0 then "Tidak ada temuan." else (group_by(.RuleID) | map("• \(.length)x \(. [0].Description)") | join("\n")) end' gitleaks-report.json)
+          # PERBAIKAN: Menangani kasus jika file gitleaks-report.json kosong (tidak ada temuan)
+          SUMMARY=$(jq -r 'if . == null or length == 0 then "Tidak ada temuan." else (group_by(.RuleID) | map("• \(.length)x \(. [0].Description)") | join("\n")) end' gitleaks-report.json)
           echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
 
   sast_scan:
@@ -72,7 +73,8 @@ jobs:
         if: always()
         run: |
           sudo apt-get install -y jq
-          SUMMARY=$(jq -r '.results | if length == 0 then "Tidak ada temuan." else (group_by(.test_name) | map("• \(.length)x \(. [0].test_name)") | join("\n")) end' bandit-report.json)
+          # PERBAIKAN: Menangani kasus jika tidak ada 'results'
+          SUMMARY=$(jq -r '.results | if . == null or length == 0 then "Tidak ada temuan." else (group_by(.test_name) | map("• \(.length)x \(. [0].test_name)") | join("\n")) end' bandit-report.json)
           echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
 
   container_scan:
@@ -95,7 +97,7 @@ jobs:
       - name: Run Trivy Scan
         id: trivy_scan
         run: trivy image --format json --output trivy-report.json --severity CRITICAL,HIGH vuln-bank:${{ github.sha }}
-        continue-on-error: true # Biarkan job selesai agar bisa parse report
+        continue-on-error: true
       - name: Upload Trivy Report
         uses: actions/upload-artifact@v4
         with: { name: trivy-report, path: trivy-report.json }
@@ -104,7 +106,8 @@ jobs:
         if: always()
         run: |
           sudo apt-get install -y jq
-          SUMMARY=$(jq -r 'if .Results == null or (.Results | length) == 0 then "Tidak ada temuan." else .Results[].Vulnerabilities | group_by(.Severity) | map("• \(.length)x \(. [0].Severity)") | join("\n") end' trivy-report.json)
+          # PERBAIKAN: Menangani kasus jika tidak ada 'Results' atau 'Vulnerabilities' (null)
+          SUMMARY=$(jq -r 'if .Results == null or (.Results | length) == 0 or .Results[0].Vulnerabilities == null then "Tidak ada temuan." else .Results[0].Vulnerabilities | group_by(.Severity) | map("• \(.length)x \(. [0].Severity)") | join("\n") end' trivy-report.json)
           echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
 
   dast:
@@ -128,7 +131,7 @@ jobs:
           docker run --network host -v ${{ github.workspace }}:/zap/wrk/:rw \
           ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
           -t http://127.0.0.1:5000 -J zap-report.json -l PASS
-        continue-on-error: true # Biarkan job selesai agar bisa parse report
+        continue-on-error: true
       - name: Upload DAST Report
         uses: actions/upload-artifact@v4
         with: { name: zap-report, path: zap-report.json }
@@ -137,25 +140,23 @@ jobs:
         if: always()
         run: |
           sudo apt-get install -y jq
-          SUMMARY=$(jq -r '.site[0].alerts | if length == 0 then "Tidak ada temuan." else (group_by(.riskdesc) | map("• \(.length)x \(. [0].riskdesc)") | join("\n")) end' zap-report.json)
+          # PERBAIKAN: Menangani kasus jika tidak ada 'alerts'
+          SUMMARY=$(jq -r '.site[0].alerts | if . == null or length == 0 then "Tidak ada temuan." else (group_by(.riskdesc) | map("• \(.length)x \(. [0].riskdesc)") | join("\n")) end' zap-report.json)
           echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
 
   notify:
     name: Send Scan Summary Notification
     runs-on: ubuntu-latest
-    # Selalu berjalan setelah semua scan selesai
     if: always()
     needs: [secret_scan, sast_scan, container_scan, dast]
     steps:
       - name: Send Discord Webhook Notification
         run: |
-          # Mengumpulkan semua ringkasan dari job sebelumnya
           GITLEAKS_SUMMARY="${{ needs.secret_scan.outputs.summary }}"
           BANDIT_SUMMARY="${{ needs.sast_scan.outputs.summary }}"
           TRIVY_SUMMARY="${{ needs.container_scan.outputs.summary }}"
           DAST_SUMMARY="${{ needs.dast.outputs.summary }}"
 
-          # Menentukan status pipeline dan warna notifikasi
           PIPELINE_STATUS="Lolos"
           PIPELINE_COLOR=3066993 # Hijau
           if [ "${{ needs.secret_scan.result }}" == "failure" ] || \
