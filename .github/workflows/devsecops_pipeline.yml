@@ -139,13 +139,15 @@ jobs:
     if: always()
     needs: [secret_scan, sast_scan, container_scan, dast]
     steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
       - name: Send Discord Webhook Notification
         run: |
-          GITLEAKS_SUMMARY="${{ needs.secret_scan.outputs.summary }}"
-          BANDIT_SUMMARY="${{ needs.sast_scan.outputs.summary }}"
-          TRIVY_SUMMARY="${{ needs.container_scan.outputs.summary }}"
-          DAST_SUMMARY="${{ needs.dast.outputs.summary }}"
+          # Buat script jadi executable
+          chmod +x scripts/generate_payload.sh
 
+          # Tentukan status pipeline
           PIPELINE_STATUS="Lolos"
           PIPELINE_COLOR=3066993 # Hijau
           if [ "${{ needs.secret_scan.result }}" == "failure" ] || \
@@ -156,26 +158,21 @@ jobs:
             PIPELINE_COLOR=15158332 # Merah
           fi
           
-         
-          GITLEAKS_SUMMARY_JSON=$(echo "$GITLEAKS_SUMMARY" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed -z 's/\n/\\n/g')
-          BANDIT_SUMMARY_JSON=$(echo "$BANDIT_SUMMARY" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed -z 's/\n/\\n/g')
-          TRIVY_SUMMARY_JSON=$(echo "$TRIVY_SUMMARY" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed -z 's/\n/\\n/g')
-          DAST_SUMMARY_JSON=$(echo "$DAST_SUMMARY" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed -z 's/\n/\\n/g')
-
+          # Buat payload JSON menggunakan script terpisah
+          JSON_PAYLOAD=$(./scripts/generate_payload.sh \
+            "$PIPELINE_STATUS" \
+            "${{ github.repository }}" \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            "$PIPELINE_COLOR" \
+            "${{ needs.secret_scan.outputs.summary }}" \
+            "${{ needs.sast_scan.outputs.summary }}" \
+            "${{ needs.container_scan.outputs.summary }}" \
+            "${{ needs.dast.outputs.summary }}" \
+            "${{ github.sha }}" \
+            "${{ github.actor }}" \
+          )
+          
+          # Kirim payload yang sudah aman
           curl -X POST -H "Content-Type: application/json" \
-          -d '{
-            "embeds": [{
-              "title": "Laporan Ringkasan DevSecOps Pipeline",
-              "description": "Status Pipeline: **'${PIPELINE_STATUS}'**\nRepositori: **${{ github.repository }}**",
-              "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-              "color": '${PIPELINE_COLOR}',
-              "fields": [
-                { "name": "Secret Scanning (Gitleaks)", "value": "```'${GITLEAKS_SUMMARY_JSON}'```" },
-                { "name": "SAST (Bandit)", "value": "```'${BANDIT_SUMMARY_JSON}'```" },
-                { "name": "Container Scanning (Trivy)", "value": "```'${TRIVY_SUMMARY_JSON}'```" },
-                { "name": "DAST (OWASP ZAP)", "value": "```'${DAST_SUMMARY_JSON}'```" }
-              ],
-              "footer": { "text": "Commit: ${{ github.sha }} oleh ${{ github.actor }}" }
-            }]
-          }' \
+          -d "$JSON_PAYLOAD" \
           ${{ secrets.DISCORD_WEBHOOK_URL }}
