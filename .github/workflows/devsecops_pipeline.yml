@@ -32,8 +32,8 @@ jobs:
         with: { fetch-depth: 0 }
       - name: Install Gitleaks
         run: |
-          wget https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz
-          tar -xzf gitleaks_8.18.2_linux_x64.tar.gz
+          wget https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz -O gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz
           sudo mv gitleaks /usr/local/bin/
       - name: Run Gitleaks Scan
         run: gitleaks detect --report-path gitleaks-report.json --report-format json -v
@@ -45,7 +45,9 @@ jobs:
         if: always()
         run: |
           SUMMARY=$(python3 scripts/parse_reports.py gitleaks gitleaks-report.json)
-          echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+          echo 'summary<<EOF' >> $GITHUB_OUTPUT
+          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
 
   sast_scan:
     name: SAST (Bandit)
@@ -65,7 +67,9 @@ jobs:
         if: always()
         run: |
           SUMMARY=$(python3 scripts/parse_reports.py bandit bandit-report.json)
-          echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+          echo 'summary<<EOF' >> $GITHUB_OUTPUT
+          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
 
   container_scan:
     name: Container Scanning (Trivy)
@@ -74,6 +78,7 @@ jobs:
     outputs:
       summary: ${{ steps.parse_report.outputs.summary }}
     steps:
+      - uses: actions/checkout@v4 # Perlu checkout kode untuk mendapatkan script python
       - uses: actions/download-artifact@v4
         with: { name: docker-image }
       - name: Load Docker image
@@ -92,10 +97,10 @@ jobs:
         id: parse_report
         if: always()
         run: |
-          # Perlu checkout kode untuk mendapatkan script python
-          uses: actions/checkout@v4
           SUMMARY=$(python3 scripts/parse_reports.py trivy trivy-report.json)
-          echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+          echo 'summary<<EOF' >> $GITHUB_OUTPUT
+          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
 
   dast:
     name: DAST (OWASP ZAP)
@@ -124,7 +129,9 @@ jobs:
         if: always()
         run: |
           SUMMARY=$(python3 scripts/parse_reports.py zap zap-report.json)
-          echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+          echo 'summary<<EOF' >> $GITHUB_OUTPUT
+          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
 
   notify:
     name: Send Scan Summary Notification
@@ -148,12 +155,12 @@ jobs:
             PIPELINE_STATUS="Gagal"
             PIPELINE_COLOR=15158332 # Merah
           fi
-
-          # Mengganti newline dengan karakter \n untuk JSON
-          GITLEAKS_SUMMARY_JSON=$(echo "$GITLEAKS_SUMMARY" | sed -z 's/\n/\\n/g')
-          BANDIT_SUMMARY_JSON=$(echo "$BANDIT_SUMMARY" | sed -z 's/\n/\\n/g')
-          TRIVY_SUMMARY_JSON=$(echo "$TRIVY_SUMMARY" | sed -z 's/\n/\\n/g')
-          DAST_SUMMARY_JSON=$(echo "$DAST_SUMMARY" | sed -z 's/\n/\\n/g')
+          
+         
+          GITLEAKS_SUMMARY_JSON=$(echo "$GITLEAKS_SUMMARY" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed -z 's/\n/\\n/g')
+          BANDIT_SUMMARY_JSON=$(echo "$BANDIT_SUMMARY" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed -z 's/\n/\\n/g')
+          TRIVY_SUMMARY_JSON=$(echo "$TRIVY_SUMMARY" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed -z 's/\n/\\n/g')
+          DAST_SUMMARY_JSON=$(echo "$DAST_SUMMARY" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed -z 's/\n/\\n/g')
 
           curl -X POST -H "Content-Type: application/json" \
           -d '{
