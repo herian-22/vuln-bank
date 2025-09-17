@@ -20,7 +20,8 @@ load_dotenv()
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app)
+# Configure CORS to be more restrictive
+CORS(app, resources={r"/api/*": {"origins": "*"}}) # Example: Allow all origins for API endpoints
 
 # Initialize database connection pool
 init_connection_pool()
@@ -1740,6 +1741,21 @@ def ai_rate_limit_status():
             'status': 'error',
             'message': str(e)
         }), 500
+
+# Custom error handler for 404 Not Found to return JSON
+@app.errorhandler(404)
+def not_found_error(error):
+    return jsonify({
+        "status": "error",
+        "message": "Resource not found",
+        "error": "404 Not Found"
+    }), 404
+
+# Add security headers to all responses
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 if __name__ == '__main__':
     init_db()
