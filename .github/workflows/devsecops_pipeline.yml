@@ -69,7 +69,6 @@ jobs:
           sudo mv gitleaks /usr/local/bin/
       - name: Run ${{ matrix.scan_type.name }}
         run: ${{ matrix.scan_type.command }}
-        # PERBAIKAN: Menggunakan sintaks yang benar (continue-on-error)
         continue-on-error: ${{ matrix.scan_type.continue-on-error }}
       - name: Upload Report
         if: always()
@@ -89,15 +88,16 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y docker-compose
       - name: Run Application using Docker Compose
         run: docker-compose up -d
-      
+        
+      # PERBAIKAN FINAL: Membuat direktori kerja sepenuhnya dapat ditulisi oleh user manapun
       - name: Set workspace permissions
         run: sudo chmod -R 777 ${{ github.workspace }}
 
-      - name:  Run ZAP Scan
-
+      - name: Run ZAP Scan
+        # Menjalankan ZAP sebagai user default di dalam kontainer.
+        # Masalah izin laporan diselesaikan oleh langkah 'chmod' di atas.
         run: |
           docker run \
-            --user $(id -u):$(id -g) \
             --network host \
             -v ${{ github.workspace }}:/zap/wrk/:rw \
             ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
