@@ -78,7 +78,7 @@ jobs:
           name: ${{ matrix.scan_type.artifact_name }}
           path: ${{ matrix.scan_type.artifact_path }}
 
-  dast:
+dast:
     name: DAST (OWASP ZAP)
     runs-on: ubuntu-latest
     needs: build
@@ -90,11 +90,14 @@ jobs:
       - name: Run Application using Docker Compose
         run: docker-compose up -d
         
-      - name: Run ZAP Scan with Full Control
+      
+      - name: Set workspace permissions
+        run: sudo chmod -R 777 ${{ github.workspace }}
+
+      - name: Run ZAP Scan
 
         run: |
           docker run \
-            --user $(id -u):$(id -g) \
             --network host \
             -v ${{ github.workspace }}:/zap/wrk/:rw \
             ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
