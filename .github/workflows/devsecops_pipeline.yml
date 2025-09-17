@@ -32,27 +32,27 @@ jobs:
             command: "gitleaks detect --report-path gitleaks-report.json --report-format json -v"
             artifact_name: "gitleaks-report"
             artifact_path: "gitleaks-report.json"
-            continue_on_error: true
+            continue_on_error: false # <-- DIUBAH DARI TRUE
           - name: "SAST (Bandit)"
             command: "pip install bandit && bandit -r . -f json -o bandit-report.json"
             artifact_name: "bandit-sast-report"
             artifact_path: "bandit-report.json"
-            continue_on_error: true
+            continue_on_error: false # <-- DIUBAH DARI TRUE
           - name: "SCA (Trivy - requirements.txt)"
             command: "trivy fs --format json --output trivy-sca-report.json --severity CRITICAL,HIGH requirements.txt"
             artifact_name: "trivy-sca-report"
             artifact_path: "trivy-sca-report.json"
-            continue_on_error: true
+            continue_on_error: false # <-- DIUBAH DARI TRUE
           - name: "Misconfiguration Scanning (Trivy - Dockerfile)"
             command: "trivy config --format json --output trivy-config-report.json --severity CRITICAL,HIGH ."
             artifact_name: "trivy-misconfig-report"
             artifact_path: "trivy-config-report.json"
-            continue_on_error: true
+            continue_on_error: false # <-- DIUBAH DARI TRUE
           - name: "Container Scanning (Trivy)"
             command: "trivy image --format json --output trivy-container-report.json --severity CRITICAL,HIGH vuln-bank:${{ needs.build.outputs.image_name }}"
             artifact_name: "trivy-container-report"
             artifact_path: "trivy-container-report.json"
-            continue_on_error: true
+            continue_on_error: false # <-- DIUBAH DARI TRUE
 
     steps:
       - name: Checkout Code
@@ -80,6 +80,8 @@ jobs:
         continue-on-error: ${{ matrix.scan_type.continue_on_error }}
 
       - name: Upload ${{ matrix.scan_type.name }} Report
+        # Jalankan langkah ini hanya jika langkah sebelumnya gagal (untuk menyimpan bukti)
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.scan_type.artifact_name }}
@@ -106,9 +108,11 @@ jobs:
         with:
           target: 'http://127.0.0.1:5000'
           cmd_options: '-J zap-report.json'
-          fail_action: false 
+          fail_action: true # <-- DIUBAH DARI FALSE
 
       - name: Upload DAST Report
+        # Jalankan langkah ini hanya jika langkah sebelumnya gagal (untuk menyimpan bukti)
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: zap-dast-report
