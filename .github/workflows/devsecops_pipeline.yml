@@ -102,6 +102,33 @@ jobs:
           echo "$SUMMARY" >> $GITHUB_OUTPUT
           echo 'EOF' >> $GITHUB_OUTPUT
 
+  misconfig_scan:
+    name: Misconfiguration Scanning (Trivy)
+    runs-on: ubuntu-latest
+    needs: build
+    outputs:
+      summary: ${{ steps.parse_report.outputs.summary }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Trivy
+        run: |
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update && sudo apt-get install -y trivy
+      - name: Run Trivy Misconfiguration Scan
+        run: trivy config --format json --output misconfig-report.json .
+        continue-on-error: true
+      - uses: actions/upload-artifact@v4
+        with: { name: misconfig-report, path: misconfig-report.json }
+      - name: Parse Trivy Misconfig Report for Summary
+        id: parse_report
+        if: always()
+        run: |
+          SUMMARY=$(python3 scripts/parse_reports.py trivy-misconfig misconfig-report.json)
+          echo 'summary<<EOF' >> $GITHUB_OUTPUT
+          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
+
   dast:
     name: DAST (OWASP ZAP)
     runs-on: ubuntu-latest
@@ -137,7 +164,7 @@ jobs:
     name: Send Scan Summary Notification
     runs-on: ubuntu-latest
     if: always()
-    needs: [secret_scan, sast_scan, container_scan, dast]
+    needs: [secret_scan, sast_scan, container_scan, misconfig_scan, dast]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -153,7 +180,8 @@ jobs:
           if [ "${{ needs.secret_scan.result }}" == "failure" ] || \
              [ "${{ needs.sast_scan.result }}" == "failure" ] || \
              [ "${{ needs.container_scan.result }}" == "failure" ] || \
-             [ "${{ needs.dast.result }}" == "failure" ]; then
+             [ "${{ needs.dast.result }}" == "failure" ] || \
+             [ "${{ needs.misconfig_scan.result }}" == "failure" ]; then
             PIPELINE_STATUS="Gagal"
             PIPELINE_COLOR=15158332 # Merah
           fi
@@ -167,6 +195,7 @@ jobs:
             "${{ needs.secret_scan.outputs.summary }}" \
             "${{ needs.sast_scan.outputs.summary }}" \
             "${{ needs.container_scan.outputs.summary }}" \
+            "${{ needs.misconfig_scan.outputs.summary }}" \
             "${{ needs.dast.outputs.summary }}" \
             "${{ github.sha }}" \
             "${{ github.actor }}" \

@@ -9,3 +9,4 @@ zap-api-report.html
 trufflehog_report.json
 bandit-sast-report.json
 ZAP_2_9_0_unix.sh
+misconfig-report.json

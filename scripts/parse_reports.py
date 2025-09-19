@@ -21,6 +21,11 @@ def get_logical_risk(tool, finding):
             return "Risiko: Kerentanan Kritis pada library yang digunakan dapat dieksploitasi oleh peretas untuk mengambil alih server atau menyebabkan kerusakan signifikan."
         if severity == "HIGH":
             return "Risiko: Kerentanan Tinggi pada library dapat dieksploitasi untuk mencuri data sensitif atau menyebabkan penolakan layanan (DoS)."
+    elif tool == "trivy-misconfig":
+        severity = finding.get("Severity", "")
+        if severity in ["CRITICAL", "HIGH"]:
+            return "Risiko: Kesalahan konfigurasi ini dapat dieksploitasi untuk mendapatkan hak akses yang tidak semestinya, mengekspos layanan, atau melemahkan postur keamanan infrastruktur."
+
     elif tool == "zap":
         name = finding.get("name", "").lower()
         if "sql injection" in name:
@@ -103,6 +108,31 @@ def parse_trivy(data):
     )
     return summary
 
+def parse_trivy_misconfig(data):
+    results = data.get("Results")
+    if not results or "Misconfigurations" not in results[0]:
+        return "Tidak ada temuan."
+
+    misconfigs = results[0].get("Misconfigurations", [])
+    if not misconfigs:
+        return "Tidak ada temuan."
+
+    # Prioritaskan CRITICAL, lalu HIGH
+    priority_finding = next((m for m in misconfigs if m.get("Severity") == "CRITICAL"), misconfigs[0])
+
+    severity = priority_finding.get("Severity", "UNKNOWN")
+    title = priority_finding.get("Title", "N/A")
+    target = results[0].get("Target", "N/A")
+    risk = get_logical_risk("trivy-misconfig", priority_finding)
+
+    summary = (
+        f"**Temuan Paling Kritis**: {title} ({severity})\n"
+        f"**Lokasi**: `{target}`\n"
+        f"**{risk}**\n"
+        f"*(Total {len(misconfigs)} temuan terdeteksi)*"
+    )
+    return summary
+
 def parse_zap(data):
     try:
         alerts = data.get("site", [])[0].get("alerts", [])
@@ -152,6 +182,7 @@ def main():
         "gitleaks": parse_gitleaks,
         "bandit": parse_bandit,
         "trivy": parse_trivy,
+        "trivy-misconfig": parse_trivy_misconfig,
         "zap": parse_zap,
     }
 
