@@ -208,47 +208,47 @@ jobs:
           ${{ secrets.DISCORD_WEBHOOK_URL }}
 
   # --- JOB BARU UNTUK MEMBUAT ISSUE ---
-  create_issue:
-    name: Create Issue on Failure
+  failure_notification:
+    name: Send Failure Notification to Webhook
     runs-on: ubuntu-latest
-    # if: failure() memastikan job ini HANYA berjalan jika ada job lain yang gagal.
+    # if: failure() memastikan job ini HANYA berjalan jika ada job lain dalam pipeline yang gagal.
     if: failure()
     needs: [secret_scan, sast_scan, container_scan, misconfig_scan, dast]
     steps:
-      - name: Create Issue Body
-        id: issue_body
+      - name: Generate Failure Payload
+        id: payload
         run: |
-          BODY=$(cat <<EOF
-          ### :warning: DevSecOps Pipeline Failure
-          A security scan has failed. Please review the findings below and address them.
-          **Repository:** ${{ github.repository }}
-          **Commit:** \`${{ github.sha }}\`
-          **Triggered by:** @${{ github.actor }}
-          ---
-          **Secret Scan (Gitleaks):**
-          ${{ needs.secret_scan.outputs.summary }}
-          ---
-          **SAST (Bandit):**
-          ${{ needs.sast_scan.outputs.summary }}
-          ---
-          **Container Scan (Trivy):**
-          ${{ needs.container_scan.outputs.summary }}
-          ---
-          **Misconfiguration Scan (Trivy):**
-          ${{ needs.misconfig_scan.outputs.summary }}
-          ---
-          **DAST (OWASP ZAP):**
-          ${{ needs.dast.outputs.summary }}
-          EOF
-          )
-          echo "body<<EOF" >> $GITHUB_OUTPUT
-          echo "$BODY" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # Membuat payload JSON yang kompatibel dengan Discord Webhook
+          # Anda bisa menyesuaikan format ini untuk platform lain (Slack, Teams, dll)
+          JSON_PAYLOAD=$(jq -n \
+            --arg title "❌ DevSecOps Pipeline Failure for commit ${{ github.sha }}" \
+            --arg url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg actor "${{ github.actor }}" \
+            --arg secret_summary "${{ needs.secret_scan.outputs.summary }}" \
+            --arg sast_summary "${{ needs.sast_scan.outputs.summary }}" \
+            --arg container_summary "${{ needs.container_scan.outputs.summary }}" \
+            --arg misconfig_summary "${{ needs.misconfig_scan.outputs.summary }}" \
+            --arg dast_summary "${{ needs.dast.outputs.summary }}" \
+            '{
+              "embeds": [{
+                "title": $title,
+                "url": $url,
+                "color": 15158332,
+                "description": "A security scan has failed. Please review the findings below and address them.",
+                "fields": [
+                  {"name": "Secret Scan (Gitleaks)", "value": $secret_summary, "inline": false},
+                  {"name": "SAST (Bandit)", "value": $sast_summary, "inline": false},
+                  {"name": "Container Scan (Trivy)", "value": $container_summary, "inline": false},
+                  {"name": "Misconfiguration Scan (Trivy)", "value": $misconfig_summary, "inline": false},
+                  {"name": "DAST (OWASP ZAP)", "value": $dast_summary, "inline": false}
+                ],
+                "footer": {"text": "Triggered by: \($actor)"}
+              }]
+            }')
+          echo "json_payload=$JSON_PAYLOAD" >> $GITHUB_OUTPUT
 
-      - name: Create GitHub Issue
-        uses: actions/create-issue@v2
+      - name: Send Webhook Notification
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          title: "DevSecOps Pipeline Failure for commit ${{ github.sha }}"
-          body: ${{ steps.issue_body.outputs.body }}
-          labels: security, bug
+          curl -X POST -H "Content-Type: application/json" \
+          -d '${{ steps.payload.outputs.json_payload }}' \
+          ${{ secrets.FAILURE_WEBHOOK_URL }} # Gunakan secret baru untuk notifikasi kegagalan
