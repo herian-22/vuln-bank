@@ -1,52 +1,96 @@
 import json
 import sys
 
+MAX_FINDINGS_PER_TYPE = 3 # Batasi jumlah detail per jenis temuan agar ringkasan tidak terlalu panjang
+
 def parse_gitleaks(data):
     if not data:
         return "Tidak ada temuan."
-    # Menghitung temuan berdasarkan deskripsinya
-    summary = {}
+    
+    summary_lines = []
+    count = 0
     for finding in data:
-        desc = finding.get("Description", "Unknown Rule")
-        summary[desc] = summary.get(desc, 0) + 1
-    return "\n".join([f"• {count}x {desc}" for desc, count in summary.items()])
+        if count >= MAX_FINDINGS_PER_TYPE:
+            summary_lines.append(f"• dan {len(data) - count} temuan lainnya...")
+            break
+        
+        desc = finding.get("Description", "Aturan tidak diketahui")
+        file = finding.get("File", "File tidak diketahui")
+        line = finding.get("StartLine", "?")
+        secret = finding.get("Secret", "secret")
+        
+        summary_lines.append(f"• **{desc}** di `{file}:{line}` (Contoh: `{secret[:15]}...`)")
+        count += 1
+        
+    return "\n".join(summary_lines) if summary_lines else "Tidak ada temuan."
 
 def parse_bandit(data):
     results = data.get("results")
     if not results:
         return "Tidak ada temuan."
-    # Menghitung temuan berdasarkan nama tes
-    summary = {}
+    
+    summary_lines = []
+    count = 0
     for result in results:
-        name = result.get("test_name", "Unknown Test")
-        summary[name] = summary.get(name, 0) + 1
-    return "\n".join([f"• {count}x {name}" for name, count in summary.items()])
+        if count >= MAX_FINDINGS_PER_TYPE:
+            summary_lines.append(f"• dan {len(results) - count} temuan lainnya...")
+            break
+            
+        test_name = result.get("test_name", "Tes tidak diketahui")
+        filename = result.get("filename", "File tidak diketahui")
+        line = result.get("line_number", "?")
+        
+        summary_lines.append(f"• **{test_name}** di `{filename}:{line}`")
+        count += 1
+        
+    return "\n".join(summary_lines) if summary_lines else "Tidak ada temuan."
 
 def parse_trivy(data):
     results = data.get("Results")
     if not results or "Vulnerabilities" not in results[0]:
         return "Tidak ada temuan."
-    # Menghitung kerentanan berdasarkan tingkat keparahan (Severity)
-    summary = {}
+    
+    summary_lines = []
+    count = 0
     vulnerabilities = results[0].get("Vulnerabilities", [])
     if not vulnerabilities:
         return "Tidak ada temuan."
+        
     for vuln in vulnerabilities:
+        if count >= MAX_FINDINGS_PER_TYPE:
+            summary_lines.append(f"• dan {len(vulnerabilities) - count} kerentanan lainnya...")
+            break
+            
         severity = vuln.get("Severity", "UNKNOWN")
-        summary[severity] = summary.get(severity, 0) + 1
-    return "\n".join([f"• {count}x {severity}" for severity, count in summary.items()])
+        pkg_name = vuln.get("PkgName", "N/A")
+        vuln_id = vuln.get("VulnerabilityID", "N/A")
+        
+        summary_lines.append(f"• **{severity}**: {vuln_id} di paket `{pkg_name}`")
+        count += 1
+        
+    return "\n".join(summary_lines) if summary_lines else "Tidak ada temuan."
 
 def parse_zap(data):
     try:
         alerts = data.get("site", [])[0].get("alerts", [])
         if not alerts:
             return "Tidak ada temuan."
-        # Menghitung peringatan berdasarkan deskripsi risiko
-        summary = {}
+        
+        summary_lines = []
+        count = 0
         for alert in alerts:
-            risk = alert.get("riskdesc", "Unknown Risk")
-            summary[risk] = summary.get(risk, 0) + 1
-        return "\n".join([f"• {count}x {risk}" for risk, count in summary.items()])
+            if count >= MAX_FINDINGS_PER_TYPE:
+                summary_lines.append(f"• dan {len(alerts) - count} peringatan lainnya...")
+                break
+                
+            risk = alert.get("risk", "Unknown")
+            name = alert.get("name", "Unknown Alert")
+            url = alert.get("instances", [{}])[0].get("uri", "N/A")
+            
+            summary_lines.append(f"• **{risk}**: {name} di `{url.split('?')[0]}`")
+            count += 1
+            
+        return "\n".join(summary_lines) if summary_lines else "Tidak ada temuan."
     except (IndexError, KeyError):
         return "Tidak ada temuan."
 
