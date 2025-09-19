@@ -6,6 +6,9 @@ on:
       - main
   workflow_dispatch:
 
+# fail-fast: false memastikan semua job akan berjalan hingga selesai,
+# bahkan jika salah satu job gagal. Ini penting untuk mengumpulkan
+# semua hasil scan keamanan sebelum membuat keputusan.
 jobs:
   build:
     name: Build and Upload Docker Image
@@ -58,8 +61,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run Bandit Scan
+        # continue-on-error: false akan menggagalkan job ini jika Bandit menemukan kerentanan.
         run: pip install bandit && bandit -r . -f json -o bandit-report.json
-        continue-on-error: true
+        continue-on-error: false
       - uses: actions/upload-artifact@v4
         with: { name: bandit-report, path: bandit-report.json }
       - name: Parse Bandit Report for Summary
@@ -78,7 +82,7 @@ jobs:
     outputs:
       summary: ${{ steps.parse_report.outputs.summary }}
     steps:
-      - uses: actions/checkout@v4 # Perlu checkout kode untuk mendapatkan script python
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: { name: docker-image }
       - name: Load Docker image
@@ -89,8 +93,10 @@ jobs:
           echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
           sudo apt-get update && sudo apt-get install -y trivy
       - name: Run Trivy Scan
+        # continue-on-error: false akan menggagalkan job ini jika Trivy menemukan
+        # kerentanan CRITICAL atau HIGH.
         run: trivy image --format json --output trivy-report.json --severity CRITICAL,HIGH vuln-bank:${{ github.sha }}
-        continue-on-error: true
+        continue-on-error: false
       - uses: actions/upload-artifact@v4
         with: { name: trivy-report, path: trivy-report.json }
       - name: Parse Trivy Report for Summary
@@ -163,7 +169,7 @@ jobs:
   notify:
     name: Send Scan Summary Notification
     runs-on: ubuntu-latest
-    if: always()
+    if: always() # Selalu jalankan notifikasi, baik sukses maupun gagal
     needs: [secret_scan, sast_scan, container_scan, misconfig_scan, dast]
     steps:
       - name: Checkout Code
@@ -171,22 +177,18 @@ jobs:
 
       - name: Send Discord Webhook Notification
         run: |
-          # Buat script jadi executable
           chmod +x scripts/generate_payload.sh
-
-          # Tentukan status pipeline
           PIPELINE_STATUS="Lolos"
-          PIPELINE_COLOR=3066993 # Hijau
+          PIPELINE_COLOR=3066993
           if [ "${{ needs.secret_scan.result }}" == "failure" ] || \
              [ "${{ needs.sast_scan.result }}" == "failure" ] || \
              [ "${{ needs.container_scan.result }}" == "failure" ] || \
              [ "${{ needs.dast.result }}" == "failure" ] || \
              [ "${{ needs.misconfig_scan.result }}" == "failure" ]; then
             PIPELINE_STATUS="Gagal"
-            PIPELINE_COLOR=15158332 # Merah
+            PIPELINE_COLOR=15158332
           fi
           
-          # Buat payload JSON menggunakan script terpisah
           JSON_PAYLOAD=$(./scripts/generate_payload.sh \
             "$PIPELINE_STATUS" \
             "${{ github.repository }}" \
@@ -201,7 +203,52 @@ jobs:
             "${{ github.actor }}" \
           )
           
-          # Kirim payload yang sudah aman
           curl -X POST -H "Content-Type: application/json" \
           -d "$JSON_PAYLOAD" \
           ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+  # --- JOB BARU UNTUK MEMBUAT ISSUE ---
+  create_issue:
+    name: Create Issue on Failure
+    runs-on: ubuntu-latest
+    # if: failure() memastikan job ini HANYA berjalan jika ada job lain yang gagal.
+    if: failure()
+    needs: [secret_scan, sast_scan, container_scan, misconfig_scan, dast]
+    steps:
+      - name: Create Issue Body
+        id: issue_body
+        run: |
+          BODY=$(cat <<EOF
+          ### :warning: DevSecOps Pipeline Failure
+          A security scan has failed. Please review the findings below and address them.
+          **Repository:** ${{ github.repository }}
+          **Commit:** \`${{ github.sha }}\`
+          **Triggered by:** @${{ github.actor }}
+          ---
+          **Secret Scan (Gitleaks):**
+          ${{ needs.secret_scan.outputs.summary }}
+          ---
+          **SAST (Bandit):**
+          ${{ needs.sast_scan.outputs.summary }}
+          ---
+          **Container Scan (Trivy):**
+          ${{ needs.container_scan.outputs.summary }}
+          ---
+          **Misconfiguration Scan (Trivy):**
+          ${{ needs.misconfig_scan.outputs.summary }}
+          ---
+          **DAST (OWASP ZAP):**
+          ${{ needs.dast.outputs.summary }}
+          EOF
+          )
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          echo "$BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Issue
+        uses: actions/create-issue@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "DevSecOps Pipeline Failure for commit ${{ github.sha }}"
+          body: ${{ steps.issue_body.outputs.body }}
+          labels: security, bug
