@@ -1,0 +1,60 @@
+name: CD Release and Deploy
+
+on:
+  # Pemicu utama: berjalan setelah workflow CI selesai
+  workflow_run:
+    workflows: ["1 - CI Security Check"] # Nama workflow CI
+    types:
+      - completed
+    branches:
+      - main
+
+jobs:
+  # Job deploy hanya akan berjalan jika CI sukses
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    # Kondisi untuk memastikan workflow CI sebelumnya sukses
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deploy to Server via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # Tarik image yang spesifik dari registry
+            docker pull ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}
+            
+            # Hentikan dan hapus container lama jika ada
+            docker stop my-app-container || true
+            docker rm my-app-container || true
+            
+            # Jalankan container baru
+            docker run -d --name my-app-container -p 5000:5000 \
+              ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}
+            
+            echo "Deployment successful!"
+
+  # Anda bisa menambahkan job compliance atau integrasi lain di sini
+  cis_scan:
+    name: CIS Benchmark Scan
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      # ... (Langkah-langkah untuk pull image dari registry dan menjalakan OpenSCAP) ...
+      
+  upload_to_vulnerability_manager:
+    name: Upload Final Report to Manager
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      # ... (Langkah-langkah untuk mengumpulkan semua laporan dan mengirimkannya ke manajer kerentanan) ...
