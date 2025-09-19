@@ -1,4 +1,4 @@
-name: CI Security Check
+name: 1 - CI Security Check
 
 on:
   push:
@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write # Izin untuk push ke GitHub Container Registry
+      packages: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -56,7 +56,6 @@ jobs:
       - name: Parse Gitleaks Report for Summary
         id: parse_report
         if: always()
-        # Anda perlu membuat skrip parse_reports.py
         run: |
           SUMMARY="Gitleaks found $(jq 'length' gitleaks-report.json) potential secrets."
           echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
@@ -66,17 +65,18 @@ jobs:
     runs-on: ubuntu-latest
     needs: build_and_push
     permissions:
-      security-events: write # Izin untuk upload hasil SARIF
+      security-events: write
     outputs:
       summary: ${{ steps.parse_report.outputs.summary }}
     steps:
       - uses: actions/checkout@v4
       - name: Run Bandit Scan
+        
+        continue-on-error: false
         run: |
           pip install bandit
           bandit -r . -f json -o bandit-report.json
           bandit -r . -f sarif -o bandit.sarif
-        continue-on-error: false # GAGALKAN build jika ada temuan
       - uses: actions/upload-artifact@v4
         with: { name: bandit-report, path: bandit-report.json }
       - name: Upload Bandit SARIF to GitHub Security Tab
@@ -97,7 +97,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build_and_push
     permissions:
-      security-events: write # Izin untuk upload hasil SARIF
+      security-events: write
     outputs:
       summary: ${{ steps.parse_report.outputs.summary }}
     steps:
@@ -113,10 +113,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Run Trivy Scan
+        
+        continue-on-error: false
         run: |
           trivy image --format json --output trivy-report.json --severity CRITICAL,HIGH ghcr.io/${{ github.repository }}:${{ github.sha }}
           trivy image --format sarif --output trivy.sarif --severity CRITICAL,HIGH ghcr.io/${{ github.repository }}:${{ github.sha }}
-        continue-on-error: false # GAGALKAN build jika ada temuan
       - uses: actions/upload-artifact@v4
         with: { name: trivy-report, path: trivy-report.json }
       - name: Upload Trivy SARIF to GitHub Security Tab
@@ -132,12 +133,11 @@ jobs:
           SUMMARY="Trivy found $CRITICAL critical, $HIGH high severity vulnerabilities."
           echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
 
-  # Anda dapat menambahkan kembali job dast dan misconfig_scan di sini jika diperlukan
-
-notification_hub:
+ 
+  notification_hub:
     name: Send Smart Notification
     runs-on: ubuntu-latest
-    if: always() # Job ini akan selalu berjalan untuk melaporkan status akhir
+    if: always()
     needs: [secret_scan, sast_scan, container_scan]
     steps:
       - name: Determine Status and Send Webhook
@@ -157,8 +157,6 @@ notification_hub:
           fi
 
           # --- Membuat Payload JSON Berdasarkan Status ---
-          # Payload ini akan berisi semua detail jika GAGAL (menggantikan "create issue")
-          # atau ringkasan singkat jika LOLOS.
           JSON_PAYLOAD=$(cat <<EOF
           {
             "username": "DevSecOps Bot",

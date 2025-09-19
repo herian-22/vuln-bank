@@ -1,4 +1,5 @@
-name: CD Release and Deploy
+# Nama file: .github/workflows/2-cd-release.yml
+name: 2 - CD Release and Deploy
 
 on:
   # Pemicu utama: berjalan setelah workflow CI selesai
@@ -44,17 +45,21 @@ jobs:
             
             echo "Deployment successful!"
 
-  # Anda bisa menambahkan job compliance atau integrasi lain di sini
   cis_scan:
     name: CIS Benchmark Scan
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
-      # ... (Langkah-langkah untuk pull image dari registry dan menjalakan OpenSCAP) ...
-      
+      # FIX: Menambahkan langkah placeholder agar 'steps' tidak kosong
+      - name: Placeholder for CIS Scan
+        run: echo "CIS scan step will be implemented here."
+
+# FIX: Indentasi untuk job di bawah ini telah diperbaiki agar sejajar dengan 'deploy' dan 'cis_scan'
   upload_to_vulnerability_manager:
     name: Upload Final Report to Manager
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
-      # ... (Langkah-langkah untuk mengumpulkan semua laporan dan mengirimkannya ke manajer kerentanan) ...
+      # FIX: Menambahkan langkah placeholder agar 'steps' tidak kosong
+      - name: Placeholder for Report Upload
+        run: echo "Report upload step will be implemented here."
