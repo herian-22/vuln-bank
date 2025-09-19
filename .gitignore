@@ -1,2 +1,11 @@
 .env
-./json
+
+# Security Reports
+gitleaks-report.json
+secretscanner-report.json
+trivy-sca-report.json
+zap-api-report.json
+zap-api-report.html
+trufflehog_report.json
+bandit-sast-report.json
+ZAP_2_9_0_unix.sh
