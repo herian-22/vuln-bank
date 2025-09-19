@@ -1,44 +1,31 @@
-name: 1 - CI Security Check
+name: DevSecOps Security Pipeline
 
 on:
   push:
     branches:
       - main
-      - 'feature/**'
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
 
+
 jobs:
-  build_and_push:
-    name: Build and Push Docker Image
+  build:
+    name: Build and Upload Docker Image
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - uses: actions/checkout@v4
+      - name: Build Docker Image
+        run: docker build -t vuln-bank:${{ github.sha }} .
+      - name: Save Docker image
+        run: docker save vuln-bank:${{ github.sha }} -o image.tar
+      - uses: actions/upload-artifact@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+          name: docker-image
+          path: image.tar
 
   secret_scan:
     name: Secret Scanning (Gitleaks)
     runs-on: ubuntu-latest
-    needs: build_and_push
+    needs: build
     outputs:
       summary: ${{ steps.parse_report.outputs.summary }}
     steps:
@@ -47,7 +34,8 @@ jobs:
       - name: Install Gitleaks
         run: |
           wget https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz -O gitleaks.tar.gz
-          tar -xzf gitleaks.tar.gz && sudo mv gitleaks /usr/local/bin/
+          tar -xzf gitleaks.tar.gz
+          sudo mv gitleaks /usr/local/bin/
       - name: Run Gitleaks Scan
         run: gitleaks detect --report-path gitleaks-report.json --report-format json -v
         continue-on-error: true
@@ -57,154 +45,207 @@ jobs:
         id: parse_report
         if: always()
         run: |
-          SUMMARY="Gitleaks found $(jq 'length' gitleaks-report.json) potential secrets."
-          echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+          SUMMARY=$(python3 scripts/parse_reports.py gitleaks gitleaks-report.json)
+          echo 'summary<<EOF' >> $GITHUB_OUTPUT
+          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
 
   sast_scan:
     name: SAST (Bandit)
     runs-on: ubuntu-latest
-    needs: build_and_push
-    permissions:
-      security-events: write
+    needs: build
     outputs:
       summary: ${{ steps.parse_report.outputs.summary }}
     steps:
       - uses: actions/checkout@v4
       - name: Run Bandit Scan
-        
+       
+        run: pip install bandit && bandit -r . -f json -o bandit-report.json
         continue-on-error: false
-        run: |
-          pip install bandit
-          bandit -r . -f json -o bandit-report.json
-          bandit -r . -f sarif -o bandit.sarif
       - uses: actions/upload-artifact@v4
         with: { name: bandit-report, path: bandit-report.json }
-      - name: Upload Bandit SARIF to GitHub Security Tab
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: bandit.sarif
       - name: Parse Bandit Report for Summary
         id: parse_report
         if: always()
         run: |
-          HIGH=$(jq '.metrics._totals."SEVERITY.HIGH"' bandit-report.json)
-          MEDIUM=$(jq '.metrics._totals."SEVERITY.MEDIUM"' bandit-report.json)
-          SUMMARY="Bandit found $HIGH high, $MEDIUM medium severity issues."
-          echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+          SUMMARY=$(python3 scripts/parse_reports.py bandit bandit-report.json)
+          echo 'summary<<EOF' >> $GITHUB_OUTPUT
+          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
 
   container_scan:
     name: Container Scanning (Trivy)
     runs-on: ubuntu-latest
-    needs: build_and_push
-    permissions:
-      security-events: write
+    needs: build
     outputs:
       summary: ${{ steps.parse_report.outputs.summary }}
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: docker-image }
+      - name: Load Docker image
+        run: docker load -i image.tar
       - name: Install Trivy
         run: |
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
-          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
           sudo apt-get update && sudo apt-get install -y trivy
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - name: Run Trivy Scan
-        
+
+        run: trivy image --format json --output trivy-report.json --severity CRITICAL,HIGH vuln-bank:${{ github.sha }}
         continue-on-error: false
-        run: |
-          trivy image --format json --output trivy-report.json --severity CRITICAL,HIGH ghcr.io/${{ github.repository }}:${{ github.sha }}
-          trivy image --format sarif --output trivy.sarif --severity CRITICAL,HIGH ghcr.io/${{ github.repository }}:${{ github.sha }}
       - uses: actions/upload-artifact@v4
         with: { name: trivy-report, path: trivy-report.json }
-      - name: Upload Trivy SARIF to GitHub Security Tab
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy.sarif
       - name: Parse Trivy Report for Summary
         id: parse_report
         if: always()
         run: |
-          CRITICAL=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-report.json)
-          HIGH=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-report.json)
-          SUMMARY="Trivy found $CRITICAL critical, $HIGH high severity vulnerabilities."
-          echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+          SUMMARY=$(python3 scripts/parse_reports.py trivy trivy-report.json)
+          echo 'summary<<EOF' >> $GITHUB_OUTPUT
+          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
 
- 
-  notification_hub:
-    name: Send Smart Notification
+  misconfig_scan:
+    name: Misconfiguration Scanning (Trivy)
     runs-on: ubuntu-latest
-    if: always()
-    needs: [secret_scan, sast_scan, container_scan]
+    needs: build
+    outputs:
+      summary: ${{ steps.parse_report.outputs.summary }}
     steps:
-      - name: Determine Status and Send Webhook
+      - uses: actions/checkout@v4
+      - name: Install Trivy
         run: |
-          # --- Cek Status Pipeline ---
-          if [ "${{ needs.sast_scan.result }}" == "failure" ] || \
-             [ "${{ needs.container_scan.result }}" == "failure" ]; then
-            STATUS="Gagal"
-            COLOR=15158332 # Merah
-            TITLE="🚨 Peringatan: CI Security Pipeline Gagal!"
-            DESCRIPTION="Salah satu pemindaian keamanan gagal. Harap segera tinjau log untuk detail lengkap dan lakukan perbaikan."
-          else
-            STATUS="Lolos"
-            COLOR=3066993 # Hijau
-            TITLE="✅ CI Security Pipeline Berhasil"
-            DESCRIPTION="Semua pemindaian keamanan berhasil dilewati."
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+          echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update && sudo apt-get install -y trivy
+      - name: Run Trivy Misconfiguration Scan
+        run: trivy config --format json --output misconfig-report.json .
+        continue-on-error: true
+      - uses: actions/upload-artifact@v4
+        with: { name: misconfig-report, path: misconfig-report.json }
+      - name: Parse Trivy Misconfig Report for Summary
+        id: parse_report
+        if: always()
+        run: |
+          SUMMARY=$(python3 scripts/parse_reports.py trivy-misconfig misconfig-report.json)
+          echo 'summary<<EOF' >> $GITHUB_OUTPUT
+          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
+
+  dast:
+    name: DAST (OWASP ZAP)
+    runs-on: ubuntu-latest
+    needs: build
+    outputs:
+      summary: ${{ steps.parse_zap_report.outputs.summary }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Docker Compose
+        run: sudo apt-get update && sudo apt-get install -y docker-compose
+      - name: Run Application using Docker Compose
+        run: docker-compose up -d
+      - name: Set workspace permissions
+        run: sudo chmod -R 777 ${{ github.workspace }}
+      - name: Run ZAP Scan
+        run: |
+          docker run --network host -v ${{ github.workspace }}:/zap/wrk/:rw \
+          ghcr.io/zaproxy/zaproxy:stable zap-baseline.py \
+          -t http://127.0.0.1:5000 -J zap-report.json -l PASS
+        continue-on-error: true
+      - uses: actions/upload-artifact@v4
+        with: { name: zap-report, path: zap-report.json }
+      - name: Parse ZAP Report for Summary
+        id: parse_zap_report
+        if: always()
+        run: |
+          SUMMARY=$(python3 scripts/parse_reports.py zap zap-report.json)
+          echo 'summary<<EOF' >> $GITHUB_OUTPUT
+          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
+
+  notify:
+    name: Send Scan Summary Notification
+    runs-on: ubuntu-latest
+    if: always() 
+    needs: [secret_scan, sast_scan, container_scan, misconfig_scan, dast]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Send Discord Webhook Notification
+        run: |
+          chmod +x scripts/generate_payload.sh
+          PIPELINE_STATUS="Lolos"
+          PIPELINE_COLOR=3066993
+          if [ "${{ needs.secret_scan.result }}" == "failure" ] || \
+             [ "${{ needs.sast_scan.result }}" == "failure" ] || \
+             [ "${{ needs.container_scan.result }}" == "failure" ] || \
+             [ "${{ needs.dast.result }}" == "failure" ] || \
+             [ "${{ needs.misconfig_scan.result }}" == "failure" ]; then
+            PIPELINE_STATUS="Gagal"
+            PIPELINE_COLOR=15158332
           fi
-
-          # --- Membuat Payload JSON Berdasarkan Status ---
-          JSON_PAYLOAD=$(cat <<EOF
-          {
-            "username": "DevSecOps Bot",
-            "avatar_url": "https://i.imgur.com/fJc1mOa.png",
-            "content": "**Status Pipeline: $STATUS**",
-            "embeds": [{
-              "title": "$TITLE",
-              "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-              "color": "$COLOR",
-              "description": "$DESCRIPTION",
-              "fields": [
-                {
-                  "name": "Repository",
-                  "value": "${{ github.repository }}",
-                  "inline": true
-                },
-                {
-                  "name": "Pemicu",
-                  "value": "${{ github.actor }}",
-                  "inline": true
-                },
-                {
-                  "name": "Commit",
-                  "value": "\`${{ github.sha }}\`"
-                },
-                {
-                  "name": "🛡️ Secret Scan (Gitleaks)",
-                  "value": "${{ needs.secret_scan.outputs.summary }}"
-                },
-                {
-                  "name": "🔬 SAST (Bandit)",
-                  "value": "${{ needs.sast_scan.outputs.summary }}"
-                },
-                {
-                  "name": "📦 Container Scan (Trivy)",
-                  "value": "${{ needs.container_scan.outputs.summary }}"
-                }
-              ],
-              "footer": {
-                "text": "Laporan Dibuat Otomatis"
-              },
-              "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"
-            }]
-          }
-          EOF
+          
+          JSON_PAYLOAD=$(./scripts/generate_payload.sh \
+            "$PIPELINE_STATUS" \
+            "${{ github.repository }}" \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            "$PIPELINE_COLOR" \
+            "${{ needs.secret_scan.outputs.summary }}" \
+            "${{ needs.sast_scan.outputs.summary }}" \
+            "${{ needs.container_scan.outputs.summary }}" \
+            "${{ needs.misconfig_scan.outputs.summary }}" \
+            "${{ needs.dast.outputs.summary }}" \
+            "${{ github.sha }}" \
+            "${{ github.actor }}" \
           )
-
-          # --- Kirim Payload ke Webhook ---
+          
           curl -X POST -H "Content-Type: application/json" \
           -d "$JSON_PAYLOAD" \
           ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+ 
+  create_issue:
+    name: Create Issue on Failure
+    runs-on: ubuntu-latest
+    
+    if: failure()
+    needs: [secret_scan, sast_scan, container_scan, misconfig_scan, dast]
+    steps:
+      - name: Create Issue Body
+        id: issue_body
+        run: |
+          BODY=$(cat <<EOF
+          ### :warning: DevSecOps Pipeline Failure
+          A security scan has failed. Please review the findings below and address them.
+          **Repository:** ${{ github.repository }}
+          **Commit:** \`${{ github.sha }}\`
+          **Triggered by:** @${{ github.actor }}
+          ---
+          **Secret Scan (Gitleaks):**
+          ${{ needs.secret_scan.outputs.summary }}
+          ---
+          **SAST (Bandit):**
+          ${{ needs.sast_scan.outputs.summary }}
+          ---
+          **Container Scan (Trivy):**
+          ${{ needs.container_scan.outputs.summary }}
+          ---
+          **Misconfiguration Scan (Trivy):**
+          ${{ needs.misconfig_scan.outputs.summary }}
+          ---
+          **DAST (OWASP ZAP):**
+          ${{ needs.dast.outputs.summary }}
+          EOF
+          )
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          echo "$BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Issue
+        uses: actions/create-issue@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "DevSecOps Pipeline Failure for commit ${{ github.sha }}"
+          body: ${{ steps.issue_body.outputs.body }}
+          labels: security, bug
